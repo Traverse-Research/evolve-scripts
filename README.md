@@ -1,8 +1,12 @@
-# Evolve scripts
+<div align="center">
+
+# 📜 Evolve scripts
 
 **Evolutionary benchmarking software**
 
 [![Banner](./docs/images/banner.png)](https://traverseresearch.nl)
+
+</div>
 
 ## 👷‍♀️ Requirements
 
