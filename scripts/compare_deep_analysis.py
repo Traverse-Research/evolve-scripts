@@ -4,7 +4,6 @@ from collections import defaultdict
 import numpy as np
 import argparse
 import sys
-import pprint
 
 from flatten_json import flatten
 
@@ -18,7 +17,6 @@ def aggregate_loops_passes(json):
     num_loops = len(json)
     for loop_results in json:
         for frame_index, frame_results in enumerate(loop_results["per_frame_results"]):
-            #pprint.pprint(frame_results)
             if frame_index >= len(results_per_frame):
                 results_per_frame.append(defaultdict(int))
             for command_buffer_timings in frame_results[
@@ -34,9 +32,8 @@ def aggregate_loops_passes(json):
             for metric_name, metric in frame_results["metrics"].items():
                 # TODO: Flatten this in rust to fan_speed_rpm
                 if metric_name == "fan_speed":
-                    value = metric["Percent"] if "Percent" in metric else metric["Rpm"]
                     results_per_frame[frame_index]["fan_speed_rpm"] += (
-                        value / num_loops
+                        metric["Rpm"] / num_loops
                     )
                 # Filter out unavailable data and the timestamp
                 elif metric is not None and metric_name != "timestamp":
@@ -72,10 +69,10 @@ def output_top_passes(input_1, input_2):
     combined_data.index.names = ["Pass Name"]
     combined_data["pct_diff"] = (
         combined_data["Input 1"] / combined_data["Input 2"]
-    ).abs().drop(metric_names(), errors="ignore") * 100
+    ).abs().drop(metric_names()) * 100
     combined_data = (
         combined_data.sort_values(by="pct_diff", ascending=False)
-        #.iloc[:20]
+        .iloc[:20]
         .round()
         .dropna()
         .astype(int)
@@ -100,10 +97,10 @@ def output_top_stdev(input_1, input_2):
     # depending on the set language
     combined_data["pct_diff"] = (
         combined_data["Input 1"] / combined_data["Input 2"]
-    ).abs().drop(metric_names(), errors="ignore") * 100
+    ).abs().drop(metric_names()) * 100
     combined_data = (
         combined_data.sort_values(by="pct_diff", ascending=False)
-        #.iloc[:20]
+        .iloc[:20]
         .round()
         .dropna()
         .astype(int)
@@ -143,7 +140,7 @@ def main():
         parser.print_usage()
         exit(2)
 
-    if not args.pass_mean_comparison and not args.pass_stdev_comparison:
+    if args.pass_mean_comparison is None and args.pass_stdev_comparison is None:
         print("Error: No analysis option specified, specify at least one\n")
         parser.print_usage()
         exit(1)
