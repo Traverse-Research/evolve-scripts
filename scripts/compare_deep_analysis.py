@@ -121,11 +121,13 @@ def main():
     )
     parser.add_argument(
         "--pass_mean_comparison",
-        help="Outputs the top 20 passes with the highest difference in mean execution time per pass to the specified path as csv. Useful for comparing the execution time of passes between different input files.",
+        help="The file to write the top 20 passes with the highest difference in mean execution time per pass to the specified path as csv. Useful for comparing the execution time of passes between different input files.",
+        metavar="csv_output_filename"
     )
     parser.add_argument(
         "--pass_stdev_comparison",
-        help="Outputs the top 20 passes with the highest difference of the standard deviation over execution time to the specified path as csv. Useful for comparing the variance in execution times of passes between different input files.",
+        help="The file to write the top 20 passes with the highest difference of the standard deviation over execution time to the specified path as csv. Useful for comparing the variance in execution times of passes between different input files.",
+        metavar="csv_output_filename"
     )
     try:
         args = parser.parse_args()
