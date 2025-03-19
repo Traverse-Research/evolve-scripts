@@ -32,10 +32,11 @@ python -m pip install -r requirements.txt
 usage: Evolve Deep Analysis Comparison [-h] [--pass_mean_comparison PASS_MEAN_COMPARISON] [--pass_stdev_comparison PASS_STDEV_COMPARISON] deep_analysis_file deep_analysis_file
 ```
 
-Parameters:
-`deep_analysis_file` - The path(s) to the input files to compare, produced by Evolve's deep analysis.
-`--pass_mean_comparison [filename]` - The csv file to which to output a comparison of the mean execution times of the render passes with the highest difference in mean execution times between the two. Example: `--pass_mean_comparison mean_difference.csv`.
-`--pass_stdev_comparison [filename]` - The csv file to which to output a comparison of the standard deviation over execution times of the render passes with the highest difference in standard deviation over the execution time, between the two. Example: `--pass_stdev_comparison stdev_difference.csv`.
+### Parameters:
+
+- `deep_analysis_file` - The path(s) to the input files to compare, produced by Evolve's deep analysis.
+- `--pass_mean_comparison [filename]` - The csv file to which to output a comparison of the mean execution times of the render passes with the highest difference in mean execution times between the two. Example: `--pass_mean_comparison mean_difference.csv`.
+- `--pass_stdev_comparison [filename]` - The csv file to which to output a comparison of the standard deviation over execution times of the render passes with the highest difference in standard deviation over the execution time, between the two. Example: `--pass_stdev_comparison stdev_difference.csv`.
 
 At least one of `--pass_mean_comparison` or `--pass_stdev_comparison` arguments is required, as the script doesn't output any information by default.
 
