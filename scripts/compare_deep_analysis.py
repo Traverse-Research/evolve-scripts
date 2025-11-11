@@ -5,8 +5,6 @@ import numpy as np
 import argparse
 import sys
 
-from flatten_json import flatten
-
 """
 Aggregates the gpu render pass data and metrics over all loop iteration to their mean over the loop iterations
 """
@@ -39,7 +37,7 @@ def aggregate_loops_passes(json):
                 elif metric is not None and metric_name != "timestamp":
                     results_per_frame[frame_index][metric_name] += metric / num_loops
     # TODO: Aggregate CPU timings
-    return pd.DataFrame([flatten(x) for x in results_per_frame])
+    return pd.DataFrame(results_per_frame)
 
 
 def metric_names():
