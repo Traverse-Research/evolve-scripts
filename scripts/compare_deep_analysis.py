@@ -27,20 +27,22 @@ def aggregate_loops_passes(json):
                         results_per_frame[frame_index][scope_name] += (
                             scope_timing["end"] - scope_timing["start"]
                         ) / num_loops
-            for metric_name, metric in frame_results["metrics"].items():
-                # TODO: Flatten this in rust to fan_speed_rpm
-                if metric_name == "fan_speed":
-                    results_per_frame[frame_index]["fan_speed_rpm"] += (
-                        metric["Rpm"] / num_loops
-                    )
-                # Filter out unavailable data and the timestamp
-                elif metric is not None and metric_name != "timestamp":
-                    results_per_frame[frame_index][metric_name] += metric / num_loops
+            if frame_results["metrics"]:
+                for metric_name, metric in frame_results["metrics"].items():
+                    # TODO: Flatten this in rust to fan_speed_rpm
+                    if metric_name == "fan_speed":
+                        results_per_frame[frame_index]["fan_speed_rpm"] += (
+                            metric["Rpm"] / num_loops
+                        )
+                    # Filter out unavailable data and the timestamp
+                    elif metric is not None and metric_name != "timestamp":
+                        results_per_frame[frame_index][metric_name] += metric / num_loops
     # TODO: Aggregate CPU timings
     return pd.DataFrame(results_per_frame)
 
 
 def metric_names():
+    # TODO: Just derive from frame_results["metrics"], also handling cases where that object is null?
     return [
         "edge_temperature_in_c",
         "hotspot_temperature_in_c",
@@ -67,7 +69,8 @@ def output_top_passes(input_1, input_2):
     combined_data.index.names = ["Pass Name"]
     combined_data["pct_diff"] = (
         combined_data["Input 1"] / combined_data["Input 2"]
-    ).abs().drop(metric_names()) * 100
+    ).abs() * 100
+    # .drop(metric_names())
     combined_data = (
         combined_data.sort_values(by="pct_diff", ascending=False)
         .iloc[:20]
@@ -95,7 +98,8 @@ def output_top_stdev(input_1, input_2):
     # depending on the set language
     combined_data["pct_diff"] = (
         combined_data["Input 1"] / combined_data["Input 2"]
-    ).abs().drop(metric_names()) * 100
+    ).abs() * 100
+    # .drop(metric_names())
     combined_data = (
         combined_data.sort_values(by="pct_diff", ascending=False)
         .iloc[:20]
