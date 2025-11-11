@@ -63,12 +63,13 @@ deep analysis inputs
 """
 
 
-def output_top_passes(input_1, input_2):
-    combined_data = pd.concat([input_1.mean(), input_2.mean()], axis=1)
-    combined_data.columns = ["Input 1", "Input 2"]
+def output_top_passes(inputs):
+    assert len(inputs) == 2
+    combined_data = pd.concat([i.mean() for i in inputs.values()], axis=1)
+    combined_data.columns = inputs.keys()
     combined_data.index.names = ["Pass Name"]
     combined_data["pct_diff"] = (
-        combined_data["Input 1"] / combined_data["Input 2"]
+        combined_data.iloc[:,0] / combined_data.iloc[:,1]
     ).abs() * 100
     # .drop(metric_names())
     combined_data = (
@@ -87,9 +88,10 @@ between the two deep deep analysis input DataFrames
 """
 
 
-def output_top_stdev(input_1, input_2):
-    combined_data = pd.concat([input_1.std(), input_2.std()], axis=1)
-    combined_data.columns = ["Input 1", "Input 2"]
+def output_top_stdev(inputs):
+    assert len(inputs) == 2
+    combined_data = pd.concat([i.std() for i in inputs.values()], axis=1)
+    combined_data.columns = inputs.keys()
     combined_data.index.names = ["Pass Name"]
     # In case there's a mismatch in frames etc.
     combined_data.replace(0, np.nan, inplace=True)
@@ -97,7 +99,7 @@ def output_top_stdev(input_1, input_2):
     # Convert to percentages, since tools like google sheets won't correctly interpret decimal results
     # depending on the set language
     combined_data["pct_diff"] = (
-        combined_data["Input 1"] / combined_data["Input 2"]
+        combined_data.iloc[:,0] / combined_data.iloc[:,1]
     ).abs() * 100
     # .drop(metric_names())
     combined_data = (
@@ -162,13 +164,10 @@ def main():
         # TODO: Use something else than input file path as naming scheme?
         output[path] = json_data
 
-    # argparse already asserts that the number of inputs is two
-    first, second = output.values()
-
     if args.pass_mean_comparison is not None:
-        output_top_passes(first, second).to_csv(args.pass_mean_comparison)
+        output_top_passes(output).to_csv(args.pass_mean_comparison)
     if args.pass_stdev_comparison is not None:
-        output_top_stdev(first, second).to_csv(args.pass_stdev_comparison)
+        output_top_stdev(output).to_csv(args.pass_stdev_comparison)
 
 
 if __name__ == "__main__":
