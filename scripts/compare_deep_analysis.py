@@ -68,17 +68,21 @@ def output_top_passes(inputs):
     combined_data = pd.concat([i.mean() for i in inputs.values()], axis=1)
     combined_data.columns = inputs.keys()
     combined_data.index.names = ["Pass Name"]
-    combined_data["pct_diff"] = (
+    combined_data["pct_diff"] = 100 - 100 / (
         combined_data.iloc[:,0] / combined_data.iloc[:,1]
-    ).abs() * 100
-    # .drop(metric_names())
+    )
     combined_data = (
-        combined_data.sort_values(by="pct_diff", ascending=False)
+        combined_data.sort_values(by="pct_diff", ascending=True)
         .iloc[:20]
         .round()
         .dropna()
         .astype(int)
     )
+    combined_data = pd.concat([
+        combined_data.iloc[:,:2].astype(str) + 'ns',
+        combined_data.iloc[:,2].astype(str) + '%',
+    ], axis=1)
+    print(combined_data)
     return combined_data
 
 
