@@ -1,18 +1,16 @@
 import pandas as pd
 import json
 from collections import defaultdict
-import numpy as np
+# import numpy as np
 import argparse
 import sys
 
 """
 Aggregates the gpu render pass data and metrics over all loop iteration to their mean over the loop iterations
 """
-
-
 def aggregate_loops_passes(json):
     results_per_frame = []
-    num_loops = len(json)
+    frames_affected = defaultdict(lambda: [0, 0, 0, 0])
     for loop_results in json:
         for frame_index, frame_results in enumerate(loop_results["per_frame_results"]):
             if frame_index >= len(results_per_frame):
@@ -24,21 +22,22 @@ def aggregate_loops_passes(json):
                     "scope_timings"
                 ].items():
                     for scope_timing in scope_timings:
-                        results_per_frame[frame_index][scope_name] += (
-                            scope_timing["end"] - scope_timing["start"]
-                        ) / num_loops
-            if frame_results["metrics"]:
-                for metric_name, metric in frame_results["metrics"].items():
-                    # TODO: Flatten this in rust to fan_speed_rpm
-                    if metric_name == "fan_speed":
-                        results_per_frame[frame_index]["fan_speed_rpm"] += (
-                            metric["Rpm"] / num_loops
-                        )
-                    # Filter out unavailable data and the timestamp
-                    elif metric is not None and metric_name != "timestamp":
-                        results_per_frame[frame_index][metric_name] += metric / num_loops
-    # TODO: Aggregate CPU timings
-    return pd.DataFrame(results_per_frame)
+                        frames_affected[scope_name][2] += 1
+                        frames_affected[scope_name][3] += scope_timing["end"] - scope_timing["start"]
+                        if scope_timing["end"] == scope_timing["start"]:
+                            frames_affected[scope_name][1] += 1
+                            if scope_name not in results_per_frame[frame_index]:
+                                frames_affected[scope_name][0] += 1
+                            results_per_frame[frame_index][scope_name] += 1
+
+    print(len(results_per_frame))
+    df = pd.DataFrame.from_dict(frames_affected, orient='index', columns=["Zero frames", "Zero scopes", "Total scopes", "Total times"])
+    df = df[df["Zero frames"] != 0]
+    df["Avg time"] = (df["Total times"] / (df["Total scopes"] - df["Zero scopes"])).dropna().astype(int)
+    df = df.sort_values(by="Zero frames", ascending=False)
+    print(df)
+
+    return results_per_frame
 
 
 def metric_names():
@@ -55,66 +54,6 @@ def metric_names():
         "voltage_in_mv",
         "vram_usage_in_mb",
     ]
-
-
-"""
-Outputs the 20 passes with the highest difference in mean between the two
-deep analysis inputs
-"""
-
-
-def output_top_passes(inputs):
-    assert len(inputs) == 2
-    combined_data = pd.concat([i.mean() for i in inputs.values()], axis=1)
-    combined_data.columns = inputs.keys()
-    combined_data.index.names = ["Pass Name"]
-    combined_data["pct_diff"] = 100 - 100 / (
-        combined_data.iloc[:,0] / combined_data.iloc[:,1]
-    )
-    combined_data = (
-        combined_data.sort_values(by="pct_diff", ascending=True)
-        .iloc[:20]
-        .round()
-        .dropna()
-        .astype(int)
-    )
-    combined_data = pd.concat([
-        combined_data.iloc[:,:2].astype(str) + 'ns',
-        combined_data.iloc[:,2].astype(str) + '%',
-    ], axis=1)
-    print(combined_data)
-    return combined_data
-
-
-"""
-Output the 20 passes with the highest difference in standard deviation
-between the two deep deep analysis input DataFrames
-"""
-
-
-def output_top_stdev(inputs):
-    assert len(inputs) == 2
-    combined_data = pd.concat([i.std() for i in inputs.values()], axis=1)
-    combined_data.columns = inputs.keys()
-    combined_data.index.names = ["Pass Name"]
-    # In case there's a mismatch in frames etc.
-    combined_data.replace(0, np.nan, inplace=True)
-
-    # Convert to percentages, since tools like google sheets won't correctly interpret decimal results
-    # depending on the set language
-    combined_data["pct_diff"] = (
-        combined_data.iloc[:,0] / combined_data.iloc[:,1]
-    ).abs() * 100
-    # .drop(metric_names())
-    combined_data = (
-        combined_data.sort_values(by="pct_diff", ascending=False)
-        .iloc[:20]
-        .round()
-        .dropna()
-        .astype(int)
-    )
-    combined_data = combined_data.drop("pct_diff", axis=1)
-    return combined_data
 
 
 def main():
@@ -150,15 +89,15 @@ def main():
         parser.print_usage()
         exit(2)
 
-    if args.pass_mean_comparison is None and args.pass_stdev_comparison is None:
-        print("Error: No analysis option specified, specify at least one\n")
-        parser.print_usage()
-        exit(1)
-    elif args.pass_mean_comparison == args.pass_stdev_comparison:
-        print(
-            "Error: Identical file outputs specified for analysis. Exiting as one will overwrite the other"
-        )
-        exit(1)
+    # if args.pass_mean_comparison is None and args.pass_stdev_comparison is None:
+    #     print("Error: No analysis option specified, specify at least one\n")
+    #     parser.print_usage()
+    #     exit(1)
+    # elif args.pass_mean_comparison == args.pass_stdev_comparison:
+    #     print(
+    #         "Error: Identical file outputs specified for analysis. Exiting as one will overwrite the other"
+    #     )
+    #     exit(1)
 
     output = {}
 
@@ -168,10 +107,6 @@ def main():
         # TODO: Use something else than input file path as naming scheme?
         output[path] = json_data
 
-    if args.pass_mean_comparison is not None:
-        output_top_passes(output).to_csv(args.pass_mean_comparison)
-    if args.pass_stdev_comparison is not None:
-        output_top_stdev(output).to_csv(args.pass_stdev_comparison)
 
 
 if __name__ == "__main__":
