@@ -6,13 +6,18 @@ import sys
 import os
 
 METADATA_COLS = (
-    "Evolve Version", "System Name", "CPU", "GPU",
-    "OS Name", "OS Version", "GPU Driver Version",
+    "Evolve Version",
+    "System Name",
+    "CPU",
+    "GPU",
+    "OS Name",
+    "OS Version",
+    "GPU Driver Version",
 )
 FRAME_ID_COLS = ("Loop Index", "Frame")
 
 TIMING_COLS = (
-    "Sequence Time (ns)",
+    "Elapsed Time (ns)",
     "Ray Tracing (ns)",
     "Acceleration Structure Build (ns)",
     "Rasterization (ns)",
@@ -21,14 +26,25 @@ TIMING_COLS = (
     "Driver (ns)",
 )
 
+METRIC_COLS = (
+    "Energy (W)",
+    "Gpu Usage (%)",
+    "Clock Speed (Mhz)",
+    "Vram Clock Speed (Mhz)",
+    "Gpu Voltage (mV)",
+    "Fan Speed (rpm or %)",
+    "Edge Temperature (C)",
+    "Hot Spot Temperature (C)",
+)
+
 SCORE_COLS = (
-    "Run Score: Raytracing",
-    "Run Score: Acceleration Structure Builds",
-    "Run Score: Rasterization",
-    "Run Score: Compute",
-    "Run Score: Workgraphs",
-    "Run Score: Driver",
-    "Run Score: Energy",
+    "Raytracing",
+    "Acceleration Structure Builds",
+    "Rasterization",
+    "Compute",
+    "Workgraphs",
+    "Driver",
+    "Energy",
 )
 
 LINE_STYLES = ["-", "--", ":", "-."]
@@ -44,14 +60,14 @@ EVOLVE_COLORS = [
     "#EFE6BF",  # Brown medium
     "#F7F4E7",  # Brown light
 ]
-EVOLVE_BG = "#07190b"       # Green darkest
-EVOLVE_PANEL = "#0d3618"    # Green darker
-EVOLVE_TEXT = "#F7F4E7"      # Brown light
-EVOLVE_GRID = "#0F3F1D"     # Green dark
+EVOLVE_BG = "#07190b"  # Green darkest
+EVOLVE_PANEL = "#0d3618"  # Green darker
+EVOLVE_TEXT = "#F7F4E7"  # Brown light
+EVOLVE_GRID = "#0F3F1D"  # Green dark
 
 
+# Load and validate a single evolve_results.csv file.
 def load_csv(path):
-    """Load and validate a single evolve_results.csv file."""
     try:
         df = pd.read_csv(path)
     except FileNotFoundError:
@@ -61,46 +77,26 @@ def load_csv(path):
         print(f"Error: Failed to parse {path}: {e}", file=sys.stderr)
         sys.exit(1)
 
-    df = df.replace("N/A", np.nan)
-
-    for col in FRAME_ID_COLS:
-        if col not in df.columns:
-            print(
-                f"Error: Required column '{col}' missing from {path}", file=sys.stderr
-            )
-            sys.exit(1)
-
     df["Loop Index"] = df["Loop Index"].astype(int)
     df["Frame"] = df["Frame"].astype(int)
 
-    present_timing_cols = [col for col in TIMING_COLS if col in df.columns]
-    missing_timing_cols = [col for col in TIMING_COLS if col not in df.columns]
-
-    if missing_timing_cols:
-        print(
-            f"Warning: {path} is missing timing columns: {', '.join(missing_timing_cols)}",
-            file=sys.stderr,
-        )
-
-    for col in present_timing_cols:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    for col in SCORE_COLS:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+    # Convert known data columns from strings to numbers, empty values become NaN
+    for group in (TIMING_COLS, METRIC_COLS, SCORE_COLS):
+        for col in group:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
 
     return df
 
 
+# Load all CSV files and compute the intersection of available timing columns.
 def load_all(paths, labels):
-    """Load all CSV files and compute the intersection of available timing columns."""
     datasets = {}
     for path, label in zip(paths, labels):
         datasets[label] = load_csv(path)
 
     available_per_file = [
-        set(col for col in TIMING_COLS if col in df.columns)
-        for df in datasets.values()
+        set(col for col in TIMING_COLS if col in df.columns) for df in datasets.values()
     ]
     common_timing_cols = list(TIMING_COLS)
     if available_per_file:
@@ -135,10 +131,10 @@ def load_all(paths, labels):
     return datasets, common_timing_cols
 
 
+# Derive display labels from file paths or explicit --labels argument.
 def make_labels(paths, explicit_labels):
-    """Derive display labels from file paths or explicit --labels argument."""
     if explicit_labels is not None:
-        labels = [l.strip() for l in explicit_labels.split(",")]
+        labels = [part.strip() for part in explicit_labels.split(",")]
         if len(labels) != len(paths):
             print(
                 f"Error: --labels has {len(labels)} entries but {len(paths)} files were provided",
@@ -152,11 +148,14 @@ def make_labels(paths, explicit_labels):
         return basenames
 
     # Basenames collide — prepend parent directory
-    return [os.path.join(os.path.basename(os.path.dirname(p)), os.path.basename(p)) for p in paths]
+    return [
+        os.path.join(os.path.basename(os.path.dirname(p)), os.path.basename(p))
+        for p in paths
+    ]
 
 
+# Extract system metadata from the first row of a dataset.
 def extract_system_info(df):
-    """Extract system metadata from the first row of a dataset."""
     row = df.iloc[0]
     info = {}
     for col in METADATA_COLS:
@@ -166,8 +165,8 @@ def extract_system_info(df):
     return info
 
 
+# Build a subtitle string with system info for each input, one line per input.
 def format_system_subtitle(datasets):
-    """Build a subtitle string with system info for each input, one line per input."""
     lines = []
     for label, df in datasets.items():
         info = extract_system_info(df)
@@ -181,13 +180,13 @@ def format_system_subtitle(datasets):
     return "\n".join(lines)
 
 
+# Show a subplot grid of timing comparisons plotted against elapsed time.
 def plot_timings(datasets, timing_cols):
-    """Show a subplot grid of timing comparisons plotted against sequence time."""
-    # Sequence Time is the X-axis, not a plotted column
-    plot_cols = [col for col in timing_cols if col != "Sequence Time (ns)"]
-    if "Sequence Time (ns)" not in timing_cols:
+    # Elapsed Time is the X-axis, not a plotted column
+    plot_cols = [col for col in timing_cols if col != "Elapsed Time (ns)"]
+    if "Elapsed Time (ns)" not in timing_cols:
         print(
-            "Error: 'Sequence Time (ns)' column is required for the X-axis",
+            "Error: 'Elapsed Time (ns)' column is required for the X-axis",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -197,19 +196,16 @@ def plot_timings(datasets, timing_cols):
     nrows_grid = (n_cols + ncols_grid - 1) // ncols_grid
 
     fig, axes = plt.subplots(
-        nrows_grid, ncols_grid, figsize=(5 * ncols_grid, 4 * nrows_grid), squeeze=False,
+        nrows_grid,
+        ncols_grid,
+        figsize=(5 * ncols_grid, 4 * nrows_grid),
+        squeeze=False,
         facecolor=EVOLVE_BG,
     )
 
-    labels = list(datasets.keys())
-
     # Collect all unique loop indices across all datasets
     all_loops = sorted(
-        set(
-            loop
-            for df in datasets.values()
-            for loop in df["Loop Index"].unique()
-        )
+        set(loop for df in datasets.values() for loop in df["Loop Index"].unique())
     )
 
     for idx, col in enumerate(plot_cols):
@@ -220,14 +216,18 @@ def plot_timings(datasets, timing_cols):
         for label_idx, (label, df) in enumerate(datasets.items()):
             color = EVOLVE_COLORS[label_idx % len(EVOLVE_COLORS)]
             for loop_idx_pos, loop_val in enumerate(all_loops):
-                loop_data = df[df["Loop Index"] == loop_val].sort_values("Sequence Time (ns)")
+                loop_data = df[df["Loop Index"] == loop_val].sort_values(
+                    "Elapsed Time (ns)"
+                )
                 if loop_data.empty:
                     continue
 
                 style = LINE_STYLES[loop_idx_pos % len(LINE_STYLES)]
-                line_label = f"{label}" if len(all_loops) == 1 else f"{label} (loop {loop_val})"
+                line_label = (
+                    f"{label}" if len(all_loops) == 1 else f"{label} (loop {loop_val})"
+                )
 
-                x_vals = loop_data["Sequence Time (ns)"].values / 1e9
+                x_vals = loop_data["Elapsed Time (ns)"].values / 1e9
 
                 ax.plot(
                     x_vals,
@@ -241,7 +241,7 @@ def plot_timings(datasets, timing_cols):
 
         short_name = col.replace(" (ns)", "")
         ax.set_title(short_name, fontsize=10, color=EVOLVE_TEXT)
-        ax.set_xlabel("Sequence Time (s)", color=EVOLVE_TEXT)
+        ax.set_xlabel("Elapsed Time (s)", color=EVOLVE_TEXT)
         ax.set_ylabel("Time (ms)", color=EVOLVE_TEXT)
         ax.tick_params(colors=EVOLVE_TEXT)
         for spine in ax.spines.values():
@@ -255,7 +255,7 @@ def plot_timings(datasets, timing_cols):
 
     # Single legend for the entire figure
     handles, legend_labels = axes[0][0].get_legend_handles_labels()
-    legend = fig.legend(
+    fig.legend(
         handles,
         legend_labels,
         loc="lower center",
@@ -281,55 +281,69 @@ def plot_timings(datasets, timing_cols):
     plt.show()
 
 
+# Extract scores for each loop index. Returns {loop_index: {col: value}}.
 def extract_scores(df):
-    """Extract per-run scores from the first row (scores are constant per run)."""
-    row = df.iloc[0]
-    scores = {}
-    for col in SCORE_COLS:
-        if col in df.columns:
-            val = row[col]
-            if pd.notna(val):
-                scores[col] = float(val)
-    return scores
+    scores_per_loop = {}
+    for loop_val in df["Loop Index"].unique():
+        row = df[df["Loop Index"] == loop_val].iloc[0]
+        scores = {}
+        for col in SCORE_COLS:
+            if col in df.columns:
+                val = row[col]
+                if pd.notna(val):
+                    scores[col] = float(val)
+        scores_per_loop[loop_val] = scores
+    return scores_per_loop
 
 
+# Show a grouped bar chart comparing run scores across inputs and loops.
 def plot_scores(datasets):
-    """Show a grouped bar chart comparing run scores across inputs."""
-    # Collect scores per label, find common score columns with data
+    # Collect scores per label per loop
     all_scores = {}
     for label, df in datasets.items():
         all_scores[label] = extract_scores(df)
 
-    # Only plot scores that have a value in at least one dataset
+    # Build list of (label, loop_index, scores) for each bar group
+    bar_groups = []
+    for label, loops in all_scores.items():
+        for loop_val, scores in sorted(loops.items()):
+            if len(loops) == 1:
+                bar_label = label
+            else:
+                bar_label = f"{label} (loop {loop_val})"
+            bar_groups.append((bar_label, scores))
+
+    # Only plot scores that have a value in at least one group
     common_scores = []
     for col in SCORE_COLS:
-        if any(col in scores for scores in all_scores.values()):
+        if any(col in scores for _, scores in bar_groups):
             common_scores.append(col)
 
     if not common_scores:
         print("Warning: No score data found in input files", file=sys.stderr)
         return
 
-    short_names = [col.replace("Run Score: ", "") for col in common_scores]
-    n_labels = len(datasets)
+    short_names = list(common_scores)
+    n_bars = len(bar_groups)
     x = np.arange(len(common_scores))
-    bar_width = 0.8 / n_labels
+    bar_width = 0.8 / n_bars
 
-    fig, ax = plt.subplots(figsize=(max(10, len(common_scores) * 1.5), 5), facecolor=EVOLVE_BG)
+    fig, ax = plt.subplots(
+        figsize=(max(10, len(common_scores) * 1.5), 5), facecolor=EVOLVE_BG
+    )
     ax.set_facecolor(EVOLVE_PANEL)
 
-    for i, (label, scores) in enumerate(all_scores.items()):
+    for i, (bar_label, scores) in enumerate(bar_groups):
         color = EVOLVE_COLORS[i % len(EVOLVE_COLORS)]
         values = [scores.get(col, 0) for col in common_scores]
         bars = ax.bar(
-            x + i * bar_width - (n_labels - 1) * bar_width / 2,
+            x + i * bar_width - (n_bars - 1) * bar_width / 2,
             values,
             bar_width,
-            label=label,
+            label=bar_label,
             color=color,
             alpha=0.85,
         )
-        # Value labels on bars
         for bar, val in zip(bars, values):
             if val > 0:
                 ax.text(
@@ -350,7 +364,7 @@ def plot_scores(datasets):
         spine.set_color(EVOLVE_GRID)
     ax.grid(True, axis="y", color=EVOLVE_GRID, alpha=0.5)
 
-    legend = ax.legend(
+    ax.legend(
         facecolor=EVOLVE_PANEL,
         edgecolor=EVOLVE_GRID,
         labelcolor=EVOLVE_TEXT,
@@ -369,10 +383,10 @@ def plot_scores(datasets):
     plt.show()
 
 
-def main():
+def parse_args():
     parser = argparse.ArgumentParser(
         prog="Evolve Results Comparison",
-        description="Compares per-frame timing data from two or more Evolve evolve_results.csv files",
+        description="Visualizes and compares per-frame timing data from one or more Evolve evolve_results.csv files",
     )
     parser.add_argument(
         "results_files",
@@ -381,7 +395,10 @@ def main():
     )
     parser.add_argument(
         "--labels",
-        help="Comma-separated labels for each input file (default: derived from filenames)",
+        help=(
+            "Comma-separated labels for each input file"
+            " (default: derived from filenames)"
+        ),
         type=str,
         default=None,
     )
@@ -393,11 +410,16 @@ def main():
         parser.print_usage()
         sys.exit(2)
 
-    if len(args.results_files) < 2:
-        print("Error: At least 2 input files are required\n", file=sys.stderr)
+    if len(args.results_files) < 1:
+        print("Error: At least 1 input file is required\n", file=sys.stderr)
         parser.print_usage()
         sys.exit(1)
 
+    return args
+
+
+def main():
+    args = parse_args()
     labels = make_labels(args.results_files, args.labels)
     datasets, timing_cols = load_all(args.results_files, labels)
     plot_scores(datasets)
