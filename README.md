@@ -52,9 +52,9 @@ The scripts and notebooks depend on several Python packages, which can be instal
 python -m pip install -r requirements.txt
 ```
 
-## 📊 Comparing deep analysis output
+## 📊 Using  `compare_deep_analysis.py`
 
-Using the `compare_deep_analysis.py` script located in the `scripts` directory, you can compare the results of two separate deep analysis output files in multiple ways. For the analysis methods, the scripts will first do an attempt to average over all loop iterations of the output. If you ran Evolve with `--looping 5`, each frame in the output will use the mean from each frame from each of the Evolve benchmark iterations.
+Using the `compare_deep_analysis.py` script, you can compare the results of two separate deep analysis output files in multiple ways. For the analysis methods, the scripts will first do an attempt to average over all loop iterations of the output. If you ran Evolve with `--looping 5`, each frame in the output will use the mean from each frame from each of the Evolve benchmark iterations.
 
 ### Usage
 ```sh
