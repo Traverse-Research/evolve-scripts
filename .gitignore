@@ -1,0 +1,8 @@
+__pycache__/
+.venv/
+.pytest_cache/
+exports/*
+!exports/README.txt
+dist/
+VERSION
+requirements.txt

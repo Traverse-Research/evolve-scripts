@@ -1,0 +1,52 @@
+# Evolve Charts settings. `evolve-charts.py` starts Streamlit from this folder so it picks them up.
+
+[server]
+# Keep everything on this computer: only reachable from this machine.
+address = "localhost"
+# Evolve exports with deep analysis are several hundred megabytes.
+maxUploadSize = 2048
+# Serves `static/`: the Spartan font and the Evolve logo.
+enableStaticServing = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+
+# Evolve's look, from `evolve/crates/evolve/src/ui/styling.rs`.
+[theme]
+base = "dark"
+# RED_MEDIUM: Evolve's primary (orange) buttons
+primaryColor = "#FD663A"
+# GREEN_DARKER: the background panel
+backgroundColor = "#0D3618"
+# GREEN_DARK: panels and widgets
+secondaryBackgroundColor = "#0F3F1D"
+# Evolve's text colour on green
+textColor = "#EFEEF0"
+# GREEN_MEDIUM
+borderColor = "#3E703C"
+dataframeBorderColor = "#3E703C"
+dataframeHeaderBackgroundColor = "#0F3F1D"
+linkColor = "#FD663A"
+greenColor = "#94C191"
+redColor = "#CC3232"
+orangeColor = "#FD663A"
+yellowColor = "#F8DD49"
+blueColor = "#619CD9"
+# BUTTON_ROUNDING
+baseRadius = "4px"
+font = "Spartan, sans-serif"
+headingFont = "Spartan, sans-serif"
+headingFontWeights = 700
+
+[[theme.fontFaces]]
+family = "Spartan"
+url = "app/static/Spartan-Regular.ttf"
+weight = 400
+
+[[theme.fontFaces]]
+family = "Spartan"
+url = "app/static/Spartan-Bold.ttf"
+weight = 700
