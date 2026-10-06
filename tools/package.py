@@ -34,7 +34,7 @@ https://github.com/Traverse-Research/evolve-scripts
 
 Compare Evolve benchmark results in your web browser. Nothing is uploaded anywhere.
 
-Windows: double-click "Start Evolve Charts".
+Windows: double-click "Start Evolve Charts" (the .bat file; it may show as a "Windows Batch File").
          If Windows asks whether to run it, choose "More info" and then "Run anyway".
 macOS:   right-click "Start Evolve Charts.command" and choose "Open" (only needed the first time).
 Linux:   run ./start-evolve-charts.sh in a terminal.

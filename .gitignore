@@ -1,8 +1,12 @@
 __pycache__/
 .venv/
 .pytest_cache/
+.ruff_cache/
+.streamlit/secrets.toml
 exports/*
 !exports/README.txt
 dist/
 VERSION
 requirements.txt
+.DS_Store
+Thumbs.db
