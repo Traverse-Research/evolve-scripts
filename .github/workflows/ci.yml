@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Lint
+        run: |
+          uvx ruff check evolve_charts tests tools evolve-charts.py
+          uvx ruff format --check evolve_charts tests tools evolve-charts.py
+      # Test against exactly the libraries the download installs (evolve-charts.py.lock).
+      - name: Install
+        run: |
+          uv venv --python 3.12
+          uv export --script evolve-charts.py --no-hashes > requirements.txt
+          uv pip install -r requirements.txt pytest
+      - name: Test
+        run: uv run --no-project pytest -q

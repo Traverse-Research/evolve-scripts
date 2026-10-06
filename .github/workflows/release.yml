@@ -1,0 +1,32 @@
+name: Release Evolve Charts
+
+# Push a tag like v1.0.0 to publish a release. Its download is always at
+# https://github.com/Traverse-Research/evolve-scripts/releases/latest/download/Evolve-Charts.zip
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Test
+        run: |
+          uv venv --python 3.12
+          uv export --script evolve-charts.py --no-hashes > requirements.txt
+          uv pip install -r requirements.txt pytest
+          uv run --no-project pytest -q
+      - name: Package
+        run: python3 tools/package.py "${GITHUB_REF_NAME#v}"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/Evolve-Charts.zip \
+            --title "Evolve Charts ${GITHUB_REF_NAME#v}" \
+            --notes "Download **Evolve-Charts.zip**, extract it, and double-click *Start Evolve Charts*. See *HOW TO START.txt* inside the zip."
