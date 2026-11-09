@@ -2,7 +2,7 @@
 
 Started by `evolve-charts.py`. Pages:
 
-- Results: load and name exports, see what each contains and how Evolve's measurements relate.
+- Results: load and name `.evolve` run files, see what each contains and how Evolve's measurements relate.
 - Scores, GPU time, Passes, GPU sensors: the analysis, with the loaded results and the
   "compare against" choice in a bar at the top.
 - Export: CSV files for spreadsheets and newsroom chart tools.
@@ -18,7 +18,7 @@ import streamlit as st
 
 from . import charts, stats
 from .categories import WORKLOAD_DESCRIPTIONS, WORKLOAD_ORDER, is_utility, workloads
-from .loader import ExportError, Result, load_export
+from .loader import LoadError, Result, load_recording
 
 APP_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = APP_DIR / "static"
@@ -145,11 +145,11 @@ def main() -> None:
 
 @st.cache_data(show_spinner=False, max_entries=32)
 def _load_file(path: str, modified: float) -> Result:
-    return load_export(Path(path).read_bytes(), Path(path).name)
+    return load_recording(Path(path).read_bytes(), Path(path).name)
 
 
-def _exports_dir() -> Path:
-    return Path(os.environ.get("EVOLVE_CHARTS_EXPORTS", Path(__file__).resolve().parent.parent / "exports"))
+def _results_dir() -> Path:
+    return Path(os.environ.get("EVOLVE_CHARTS_RESULTS", Path(__file__).resolve().parent.parent / "results"))
 
 
 def _store() -> dict:
@@ -164,8 +164,8 @@ def _on_upload() -> None:
     for upload in st.session_state.get(f"uploader-{store['upload_key']}") or []:
         try:
             with st.spinner(f"Reading {upload.name}…"):
-                result = load_export(upload.getvalue(), upload.name)
-        except ExportError as error:
+                result = load_recording(upload.getvalue(), upload.name)
+        except LoadError as error:
             store["errors"][upload.name] = str(error)
             continue
         store["errors"].pop(upload.name, None)
@@ -178,16 +178,16 @@ def _on_upload() -> None:
 def _loaded_results() -> dict[str, Result]:
     store = _store()
     loaded: list[Result] = []
-    folder = _exports_dir()
+    folder = _results_dir()
     paths = sorted(folder.iterdir()) if folder.is_dir() else []
     for path in paths:
-        if path.suffix.lower() not in {".zip", ".csv", ".json"}:
+        if path.suffix.lower() != ".evolve":
             continue
         try:
             with st.spinner(f"Reading {path.name}…"):
                 loaded.append(_load_file(str(path), path.stat().st_mtime))
             store["errors"].pop(path.name, None)
-        except ExportError as error:
+        except LoadError as error:
             store["errors"][path.name] = str(error)
     loaded += store["uploaded"].values()
 
@@ -294,7 +294,7 @@ def _missing(present: set[str], what: str) -> bool:
         st.info(f"None of the loaded results contain {what}. See the Results page for what each file contains.")
         return True
     if missing:
-        st.caption(f"Not included, because their exports contain no {what}: {', '.join(missing)}.")
+        st.caption(f"Not included, because their runs have no {what}: {', '.join(missing)}.")
     return False
 
 
@@ -329,19 +329,19 @@ def _results_page() -> None:
     results = st.session_state["results"]
     _title(
         "Results",
-        "Load Evolve exports to compare them. Everything stays on this computer.",
+        "Load Evolve runs to compare them. Everything stays on this computer.",
     )
 
     columns = st.columns(CARDS_PER_ROW)
     with columns[0].container(border=True, height="stretch"):
         st.file_uploader(
-            "**Add Evolve exports**",
-            type=["zip", "csv", "json"],
+            "**Add Evolve runs**",
+            type=["evolve"],
             accept_multiple_files=True,
             key=f"uploader-{store['upload_key']}",
             on_change=_on_upload,
-            help="The .zip from Export on Evolve's score screen, or the CSV and JSON files Evolve's command line "
-            "exports. Files in the `exports` folder next to this tool load automatically.",
+            help="The .evolve file Evolve saves for every run, in Documents\\Evolve\\results on Windows. "
+            "Files in the `results` folder next to this tool load automatically.",
         )
     for error in store["errors"].values():
         st.error(error)
@@ -351,9 +351,9 @@ def _results_page() -> None:
             """
 **How to start**
 
-1. In Evolve, finish a benchmark and click **Export** on the score screen.
+1. Run a benchmark in Evolve. Evolve saves every run as a **.evolve** file in *Documents\\Evolve\\results*.
 2. Repeat on every GPU or setting you want to compare, with the same benchmark.
-3. Drop the files in the box on the left.
+3. Drop the .evolve files in the box on the left.
 """
         )
     colors = charts.result_colors(list(results))
@@ -366,7 +366,11 @@ def _results_page() -> None:
 
     if results:
         problems = []
-        for key, what in [("Evolve Version", "Evolve versions"), ("Rendering Backend", "graphics APIs")]:
+        for key, what in [
+            ("Benchmark", "benchmarks"),
+            ("Evolve Version", "Evolve versions"),
+            ("Rendering Backend", "graphics APIs"),
+        ]:
             values = {result.metadata.get(key, "unknown") for result in results.values()}
             if len(values) > 1:
                 problems.append(f"different {what} ({', '.join(sorted(values))})")
@@ -411,7 +415,7 @@ def _result_card(result: Result, label: str, color: str) -> None:
         duration = frames["seq_s"].max() - frames["seq_s"].min() if len(frames) else 0
         lines.append(f"{len(frames):,} frames · {duration // 60:.0f}:{duration % 60:02.0f} min")
     contents = "<br>".join(
-        f"{'✓' if name in result.contents else '✗'} {name}" for name in ["Scores", "Per frame", "Deep analysis"]
+        f"{'✓' if name in result.contents else '✗'} {name}" for name in ["Scores", "Per frame", "Passes"]
     )
     body = "<br>".join(line for line in lines if line)
     st.markdown(f'<div class="result-meta">{body}<div class="contents">{contents}</div></div>', unsafe_allow_html=True)
@@ -542,7 +546,7 @@ def _gpu_time_page() -> None:
         inside = stats.summary(context.results, WARM_UP_S, "pass", within=("workload", item))
         inside = inside[inside["mean_ms"] > 0]
         if inside.empty:
-            st.caption("Load exports with deep analysis to see the passes this workload category is made of.")
+            st.caption("These runs have no pass timings to show the passes this workload category is made of.")
             return
         ranked = inside.groupby("item")["mean_ms"].max().sort_values(ascending=False)
         items = ranked.index[:TOP_PASSES].tolist()
@@ -572,12 +576,12 @@ def _passes_page() -> None:
     context = _context()
     _title("Passes", "Single blocks of GPU work, named as in Evolve. Tick passes to follow them over the run.")
     summary = stats.summary(context.results, WARM_UP_S, "pass")
-    if _missing(set(summary["result"]), "deep analysis"):
+    if _missing(set(summary["result"]), "pass timings"):
         return
     labels = [label for label in context.labels if label in set(summary["result"])]
     baseline = context.baseline if context.baseline in labels else labels[0]
     if baseline != context.baseline:
-        st.caption(f"Compared against {baseline}: {context.baseline} has no deep analysis.")
+        st.caption(f"Compared against {baseline}: {context.baseline} has no pass timings.")
     table = stats.comparison_table(summary, labels, baseline)
     # Copies, clears and other support work still count towards their workload category, but aren't listed.
     utility = table["item"].map(is_utility)

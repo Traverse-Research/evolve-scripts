@@ -1,14 +1,18 @@
-"""Reads every Evolve export into tidy pandas tables.
+"""Reads Evolve's `.evolve` run files into tidy pandas tables.
 
-Evolve exports three kinds of data, alone or bundled in the score screen's Export zip:
+Evolve saves every benchmark run as a `.evolve` file (in `Documents/Evolve/results` on Windows). It's a
+zip, called a datakit recording, of:
 
-- **scores** (`scores.csv`): one score per workload category per loop, higher is better.
-- **per frame** (`frametimes.csv`, also inside `evolve_results.csv`): GPU time per workload
-  category, plus GPU sensor readings, for every frame.
-- **deep analysis** (`deep_analysis.json`, Evolve Professional): the GPU time of every render pass
-  in every frame.
+- `datakit.json`: the format and its version.
+- `tables/<name>.parquet`: the measurements, one Parquet table each:
+  - `frames`: per frame, the GPU time of every workload category and the driver time.
+  - `gpu_scopes`: the GPU start and duration of every pass in every frame.
+  - `cpu_scopes`: the duration of every driver call.
+  - `metrics`: GPU sensor readings, sampled a few times per second.
+  - `command_buffers`: when each command buffer was submitted.
+- `documents/client_data`: JSON with the system, driver and benchmark settings.
 
-`evolve_results.csv` combines system information, scores and per-frame data in one file.
+The scores aren't in the file; they're calculated from the tables the way Evolve does (`scores.py`).
 """
 
 import hashlib
@@ -16,66 +20,47 @@ import io
 import json
 import zipfile
 from dataclasses import dataclass, field
-from pathlib import PurePath
 
+import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
-from .categories import WORKLOAD_ORDER, workloads
+from . import scores
+from .categories import workloads
 
-DEEP_ANALYSIS = "deep_analysis.json"
+DATAKIT_VERSION = 1
+TABLES = ["frames", "gpu_scopes", "cpu_scopes", "metrics"]
 
-METADATA_COLUMNS = [
-    "Evolve Version",
-    "System Name",
-    "CPU",
-    "GPU",
-    "OS Name",
-    "OS Version",
-    "GPU Driver Version",
-    "Rendering Backend",
-]
-
-# Per-frame CSV column -> workload category name (as Evolve shows it).
+# `frames` column -> workload category name (as Evolve shows it).
 WORKLOAD_COLUMNS = {
-    "Ray Tracing (ns)": "Raytracing",
-    "Acceleration Structure Build (ns)": "Acceleration Structure Builds",
-    "Rasterization (ns)": "Rasterization",
-    "Compute (ns)": "Compute",
-    "Workgraphs (ns)": "Workgraphs",
-    "NRC (ns)": "NRC",
-    "Upscaling Performance (ns)": "Upscaling",
+    "gpu_ray_tracing_ns": "Raytracing",
+    "gpu_acceleration_structure_builds_ns": "Acceleration Structure Builds",
+    "gpu_rasterization_ns": "Rasterization",
+    "gpu_compute_ns": "Compute",
+    "gpu_workgraphs_ns": "Workgraphs",
+    "gpu_nrc_ns": "NRC",
+    "gpu_upscaler_performance_ns": "Upscaling",
 }
 
-# Sensor columns in `Result.frames`, filled from deep analysis (GpuMetrics fields) or the per-frame CSV.
-METRIC_FIELDS = {
-    "usage_percentage": "gpu_usage_pct",
-    "clock_speed_in_mhz": "gpu_clock_mhz",
-    "vram_clock_speed_in_mhz": "vram_clock_mhz",
-    "power_usage_in_w": "gpu_power_w",
-    "board_power_usage_in_w": "board_power_w",
-    "soc_power_usage_in_w": "soc_power_w",
-    "voltage_in_mv": "voltage_mv",
-    "vram_usage_in_mb": "vram_used_mb",
-    "edge_temperature_in_c": "edge_temp_c",
-    "hotspot_temperature_in_c": "hotspot_temp_c",
+# `metrics` column -> sensor column in `Result.frames`.
+METRIC_COLUMNS = {
+    "gpu_usage_percent": "gpu_usage_pct",
+    "gpu_clock_mhz": "gpu_clock_mhz",
+    "vram_clock_mhz": "vram_clock_mhz",
+    "gpu_power_w": "gpu_power_w",
+    "board_power_w": "board_power_w",
+    "soc_power_w": "soc_power_w",
+    "voltage_mv": "voltage_mv",
+    "vram_usage_mib": "vram_used_mb",
+    "fan_rpm": "fan_rpm",
+    "fan_percent": "fan_pct",
+    "edge_temperature_c": "edge_temp_c",
+    "hotspot_temperature_c": "hotspot_temp_c",
 }
-FAN_FIELDS = {"Rpm": "fan_rpm", "Percent": "fan_pct"}
-METRIC_CSV_COLUMNS = {
-    # Evolve writes board power into the column it calls "Energy".
-    "Energy (W)": "board_power_w",
-    "Gpu Usage (%)": "gpu_usage_pct",
-    "Clock Speed (Mhz)": "gpu_clock_mhz",
-    "Vram Clock Speed (Mhz)": "vram_clock_mhz",
-    "Gpu Voltage (mV)": "voltage_mv",
-    "Fan Speed (rpm)": "fan_rpm",
-    "Fan Speed (%)": "fan_pct",
-    "Edge Temperature (C)": "edge_temp_c",
-    "Hot Spot Temperature (C)": "hotspot_temp_c",
-}
-SENSOR_COLUMNS = list(dict.fromkeys([*METRIC_FIELDS.values(), *FAN_FIELDS.values(), *METRIC_CSV_COLUMNS.values()]))
+SENSOR_COLUMNS = list(METRIC_COLUMNS.values())
 
 
-class ExportError(Exception):
+class LoadError(Exception):
     """A problem with an input file, worded for the person using the tool."""
 
 
@@ -84,16 +69,16 @@ class Result:
     id: str
     filename: str
     metadata: dict[str, str] = field(default_factory=dict)
-    # Score name -> score, averaged over loops. Scores Evolve didn't produce for this run are absent.
+    # Score name -> score. Scores the benchmark doesn't have are absent.
     scores: dict[str, float] = field(default_factory=dict)
     # One row per (loop, frame): GPU milliseconds per workload category, one column each.
     workloads: pd.DataFrame | None = None
-    # One row per (loop, frame): sensor readings, and from deep analysis the GPU time sum and span.
+    # One row per (loop, frame): sensor readings, and the GPU time sum and span of the passes.
     frames: pd.DataFrame | None = None
-    # Deep analysis only. One row per (loop, frame, pass): ms is the pass' own GPU time in that frame;
-    # top_ms only counts instances not nested inside another scope, so summing it never double-counts.
+    # One row per (loop, frame, pass): ms is the pass' own GPU time in that frame; top_ms only counts
+    # instances not nested inside another scope, so summing it never double-counts.
     passes: pd.DataFrame | None = None
-    # Deep analysis only: total GPU milliseconds per pass that Evolve doesn't assign to a workload category.
+    # Total GPU milliseconds per pass that Evolve doesn't assign to a workload category.
     left_out: dict[str, float] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
@@ -109,129 +94,51 @@ class Result:
             for name, present in [
                 ("Scores", bool(self.scores)),
                 ("Per frame", self.workloads is not None),
-                ("Deep analysis", self.passes is not None),
+                ("Passes", self.passes is not None),
             ]
             if present
         ]
 
 
-def load_export(data: bytes, filename: str) -> Result:
+def load_recording(data: bytes, filename: str) -> Result:
     result = Result(id=hashlib.sha256(data).hexdigest()[:12], filename=filename)
-    suffix = PurePath(filename).suffix.lower()
-    if suffix == ".zip":
-        _read_zip(result, data)
-    elif suffix == ".csv":
-        _read_csv(result, data, filename)
-    elif suffix == ".json":
-        _read_deep_analysis(result, data, filename)
-    else:
-        raise ExportError(f"{filename}: use an Evolve export (.zip, .csv or deep analysis .json).")
+    tables, client_data = _read_container(data, filename)
 
-    if not result.contents:
-        raise ExportError(f"{filename} contains no Evolve scores, per-frame data or deep analysis.")
-    if result.workloads is None and result.passes is not None:
-        result.workloads = _workloads_from_passes(result.passes, result.frames)
-    if not result.metadata:
-        result.warnings.append(f"{filename} has no system information (GPU, driver); it's labelled by file name.")
-    return result
+    run_info = client_data.get("run_info") or {}
+    variant = run_info.get("variant")
+    if not variant:
+        raise LoadError(f"{filename} doesn't say which benchmark it ran.")
+    platform = client_data.get("platform") or "Desktop"
+    version = client_data.get("evolve_version")
+    version = (version["major"], version["minor"]) if version else None
+    result.metadata = _metadata(client_data, variant)
 
-
-def _read_zip(result: Result, data: bytes) -> None:
-    try:
-        archive = zipfile.ZipFile(io.BytesIO(data))
-    except zipfile.BadZipFile:
-        raise ExportError(f"{result.filename} is not a zip file.") from None
-    members = {PurePath(name).name: name for name in archive.namelist()}
-
-    # The combined CSV holds everything the separate CSVs do, plus system information.
-    for name in ["evolve_results.csv", "frametimes.csv", "scores.csv"]:
-        if name in members:
-            _read_csv(result, archive.read(members[name]), f"{result.filename}/{name}")
-    if DEEP_ANALYSIS in members:
-        _read_deep_analysis(result, archive.read(members[DEEP_ANALYSIS]), result.filename)
-
-
-def _read_csv(result: Result, data: bytes, name: str) -> None:
-    try:
-        table = pd.read_csv(io.BytesIO(data), encoding="utf-8-sig", dtype=dict.fromkeys(METADATA_COLUMNS, str))
-    except (pd.errors.ParserError, pd.errors.EmptyDataError, UnicodeDecodeError):
-        raise ExportError(f"{name} can't be read as a CSV file.") from None
-    columns = list(table.columns)
-
-    if "Evolve Version" in columns and not result.metadata:
-        first = table.iloc[0]
-        result.metadata = {key: str(first[key]) for key in METADATA_COLUMNS if key in table and pd.notna(first[key])}
-    if columns[:1] == ["Loop"] or "Evolve Version" in columns:
-        loop = "Loop" if "Loop" in columns else "Loop Index"
-        score_columns = columns[1:] if loop == "Loop" else columns[len(_metadata_prefix(columns)) : columns.index(loop)]
-        if not result.scores:
-            result.scores = _scores(table.drop_duplicates(loop), score_columns)
-    if {"Loop Index", "Frame", "Benchmark Time (ns)"} <= set(columns) and result.workloads is None:
-        result.workloads, sensors = _per_frame(table)
-        if result.frames is None:
-            result.frames = sensors
-    if not columns or not (result.scores or result.workloads is not None or "Evolve Version" in columns):
-        raise ExportError(f"{name} isn't an Evolve scores or per-frame export.")
-
-
-def _metadata_prefix(columns: list[str]) -> list[str]:
-    return [column for column in columns if column in METADATA_COLUMNS]
-
-
-def _scores(per_loop: pd.DataFrame, columns: list[str]) -> dict[str, float]:
-    scores = {}
-    for column in columns:
-        values = pd.to_numeric(per_loop[column], errors="coerce")
-        # Evolve writes 0 for scores it didn't calculate for this benchmark (e.g. Work Graphs).
-        values = values[values > 0]
-        if len(values):
-            scores[column] = float(values.mean())
-    return scores
-
-
-def _per_frame(table: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    base = pd.DataFrame(
-        {
-            "loop": table["Loop Index"].astype(int),
-            "frame": table["Frame"].astype(int),
-            "seq_s": table["Benchmark Time (ns)"] / 1e9,
-        }
+    frames = tables["frames"]
+    gpu_scopes = tables["gpu_scopes"]
+    if not len(frames):
+        raise LoadError(f"{filename} has no frames; the run didn't finish.")
+    result.workloads = _workloads(frames)
+    metrics = tables["metrics"]
+    sensors = _sensors(frames, metrics)
+    result.scores = scores.calculate(
+        variant,
+        platform,
+        version,
+        len(frames),
+        gpu_scopes,
+        tables["cpu_scopes"]["len_ns"],
+        frames["flip"],
+        frames["ssim"],
+        metrics,
     )
-    workloads = base.copy()
-    for column, name in WORKLOAD_COLUMNS.items():
-        if column in table and table[column].notna().any():
-            # Evolve leaves the cell empty when a workload took no time in that frame.
-            workloads[name] = table[column].fillna(0) / 1e6
-    sensors = base.copy()
-    for column, name in METRIC_CSV_COLUMNS.items():
-        sensors[name] = pd.to_numeric(table[column], errors="coerce") if column in table else float("nan")
-    for name in SENSOR_COLUMNS:
-        if name not in sensors:
-            sensors[name] = float("nan")
-    return workloads, sensors
 
-
-def _read_deep_analysis(result: Result, data: bytes, filename: str) -> None:
-    text = data.decode("utf-8")
-    try:
-        loops = json.loads(text)
-    except json.JSONDecodeError:
-        # Evolve only closes the array after the last loop, so an interrupted run misses the final "]".
-        try:
-            loops = json.loads(text.rstrip().rstrip(",") + "]")
-        except json.JSONDecodeError:
-            raise ExportError(f"{filename}: {DEEP_ANALYSIS} is damaged and can't be read.") from None
-        result.warnings.append(f"{filename}: the run was interrupted; using the {len(loops)} completed loop(s).")
-    if not isinstance(loops, list) or (loops and "per_frame_results" not in loops[0]):
-        raise ExportError(f"{filename} isn't an Evolve deep analysis file.")
-
-    passes, frames, left_out = _tabulate(loops)
+    passes, totals, left_out = _passes(gpu_scopes, frames)
+    result.frames = sensors.join(totals, on="frame")
+    result.frames[["gpu_sum_ms", "left_out_ms"]] = result.frames[["gpu_sum_ms", "left_out_ms"]].fillna(0.0)
     if passes.empty:
-        result.warnings.append(
-            f"{filename}: its deep analysis has no GPU work that Evolve assigns to a workload category."
-        )
-        return
-    result.passes, result.frames, result.left_out = passes, frames, left_out
+        result.warnings.append(f"{filename} has no GPU work that Evolve assigns to a workload category.")
+        return result
+    result.passes, result.left_out = passes, left_out
 
     nested = passes["ms"].sum() - passes["top_ms"].sum()
     if nested > 0:
@@ -239,96 +146,133 @@ def _read_deep_analysis(result: Result, data: bytes, filename: str) -> None:
             f"{filename}: {nested / passes['ms'].sum():.1%} of measured GPU time is nested inside other passes. "
             "Totals only count it once."
         )
+    return result
 
 
-def _tabulate(loops: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, float]]:
-    # Pass name -> whether Evolve assigns it to a workload category.
-    categorized: dict[str, bool] = {}
-    left_out: dict[str, float] = {}
-    pass_rows = []
-    frame_rows = []
-    for loop in loops:
-        loop_index = loop["loop_index"]
-        for frame_index, frame in enumerate(loop["per_frame_results"]):
-            seq_s = frame["sequence_time_ns"] / 1e9
-            own, top = {}, {}
-            left_out_ms = 0.0
-            first_start, last_end = None, None
-            for command_buffer in frame["command_buffer_timings"].values():
-                scopes = []
-                for name, timings in command_buffer["scope_timings"].items():
-                    if name not in categorized:
-                        categorized[name] = bool(workloads(name))
-                    for timing in timings:
-                        start, end = timing["start"], timing["end"]
-                        first_start = start if first_start is None else min(first_start, start)
-                        last_end = end if last_end is None else max(last_end, end)
-                        if not categorized[name]:
-                            left_out[name] = left_out.get(name, 0.0) + (end - start) / 1e6
-                            left_out_ms += (end - start) / 1e6
-                        else:
-                            scopes.append((start, end, name))
+def _read_container(data: bytes, filename: str) -> tuple[dict[str, pd.DataFrame], dict]:
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data))
+        manifest = json.loads(archive.read("datakit.json"))
+    except (zipfile.BadZipFile, KeyError, json.JSONDecodeError):
+        raise LoadError(
+            f"{filename} isn't an Evolve run file. Use the .evolve files Evolve saves for every run."
+        ) from None
+    if manifest.get("format") != "datakit":
+        raise LoadError(f"{filename} isn't an Evolve run file.")
+    if manifest.get("version") != DATAKIT_VERSION:
+        raise LoadError(f"{filename} was saved by a newer Evolve. Download the latest Evolve Charts to read it.")
 
-                # Sorted by start, longest first: a scope ending before the current outer one is nested in it.
-                scopes.sort(key=lambda scope: (scope[0], -scope[1]))
-                outer_end = None
-                for start, end, name in scopes:
-                    duration = (end - start) / 1e6
-                    own[name] = own.get(name, 0.0) + duration
-                    if outer_end is None or end > outer_end:
-                        top[name] = top.get(name, 0.0) + duration
-                        outer_end = end
-
-            for name, ms in own.items():
-                pass_rows.append((loop_index, frame_index, seq_s, name, ms, top.get(name, 0.0)))
-
-            row = {
-                "loop": loop_index,
-                "frame": frame_index,
-                "seq_s": seq_s,
-                "gpu_sum_ms": sum(top.values()),
-                "gpu_span_ms": (last_end - first_start) / 1e6 if first_start is not None else float("nan"),
-                "left_out_ms": left_out_ms,
-            }
-            row.update(_metrics(frame.get("metrics")))
-            frame_rows.append(row)
-
-    passes = pd.DataFrame(pass_rows, columns=["loop", "frame", "seq_s", "pass", "ms", "top_ms"])
-
-    frames = pd.DataFrame(frame_rows)
-    for column in SENSOR_COLUMNS:
-        if column not in frames:
-            frames[column] = float("nan")
-    return passes, frames, left_out
+    names = set(archive.namelist())
+    tables = {}
+    for name in TABLES:
+        path = f"tables/{name}.parquet"
+        if path not in names:
+            raise LoadError(f"{filename} has no {name} table; it was saved by an Evolve version this tool can't read.")
+        tables[name] = pq.read_table(io.BytesIO(archive.read(path))).to_pandas()
+    try:
+        client_data = json.loads(archive.read("documents/client_data"))
+    except (KeyError, json.JSONDecodeError):
+        raise LoadError(f"{filename} has no readable system information.") from None
+    return tables, client_data
 
 
-def _workloads_from_passes(passes: pd.DataFrame, frames: pd.DataFrame) -> pd.DataFrame:
-    """Per-frame GPU time per workload category, the way Evolve sums it for its per-frame export."""
-    membership = pd.DataFrame(
-        [(name, workload) for name in passes["pass"].unique() for workload in workloads(name)],
-        columns=["pass", "workload"],
+def _metadata(client_data: dict, variant: str) -> dict[str, str]:
+    system = client_data.get("system_info") or {}
+    os_info = system.get("os_info") or {}
+    driver = client_data.get("driver_info") or {}
+    version = client_data.get("evolve_version")
+    driver_version = driver.get("version")
+    metadata = {
+        "Evolve Version": f"{version['major']}.{version['minor']}" if version else "",
+        "Benchmark": variant,
+        "System Name": system.get("host_name") or "",
+        "CPU": (system.get("cpu_name") or "").strip(),
+        "GPU": driver.get("device_name") or "",
+        "OS Name": os_info.get("os_type") or "",
+        "OS Version": _os_version(os_info.get("version")),
+        "GPU Driver Version": (
+            f"{driver_version['major']}.{driver_version['minor']}.{driver_version['patch']}" if driver_version else ""
+        ),
+        "Rendering Backend": client_data.get("rendering_backend") or "",
+    }
+    return {key: value for key, value in metadata.items() if value}
+
+
+def _os_version(version: dict | str | None) -> str:
+    """The `os_info` crate's version: {"Semantic": [10, 0, 26200]}, {"Rolling": ...}, {"Custom": ...}."""
+    if isinstance(version, dict):
+        for kind, value in version.items():
+            if kind == "Semantic":
+                return ".".join(str(part) for part in value)
+            return str(value) if value else kind
+    return "" if version in (None, "Unknown") else str(version)
+
+
+def _base(frames: pd.DataFrame) -> pd.DataFrame:
+    return pd.DataFrame({"loop": 1, "frame": frames["frame"].astype(int), "seq_s": frames["simulation_time_ns"] / 1e9})
+
+
+def _workloads(frames: pd.DataFrame) -> pd.DataFrame:
+    table = _base(frames)
+    for column, name in WORKLOAD_COLUMNS.items():
+        if column in frames and frames[column].notna().any():
+            # Empty when a workload took no time in that frame.
+            table[name] = frames[column].fillna(0) / 1e6
+    return table
+
+
+def _sensors(frames: pd.DataFrame, metrics: pd.DataFrame) -> pd.DataFrame:
+    """Each frame gets the latest sensor sample taken at or before it, like Evolve's own exports."""
+    table = _base(frames)
+    sample_times = metrics["simulation_time_ns"].to_numpy(dtype=float) if len(metrics) else np.array([])
+    rows = np.searchsorted(sample_times, frames["simulation_time_ns"].to_numpy(dtype=float), side="right") - 1
+    valid = rows >= 0
+    if len(metrics):
+        valid &= ~np.isnan(sample_times[np.clip(rows, 0, None)])
+    for column, name in METRIC_COLUMNS.items():
+        values = np.full(len(frames), np.nan)
+        if column in metrics and len(metrics):
+            readings = pd.to_numeric(metrics[column], errors="coerce").to_numpy(dtype=float)
+            values[valid] = readings[rows[valid]]
+        table[name] = values
+    return table
+
+
+def _passes(gpu_scopes: pd.DataFrame, frames: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, float]]:
+    """Per (frame, pass) GPU time, and per frame the summed and spanned GPU time and what was left out."""
+    scopes = pd.DataFrame(
+        {
+            "frame": gpu_scopes["frame"].astype(int),
+            "command_buffer": gpu_scopes["command_buffer"].astype(int),
+            "pass": gpu_scopes["name"].astype(str),
+            "start": gpu_scopes["start_ns"].astype("int64"),
+            "len": gpu_scopes["len_ns"].astype("int64"),
+        }
     )
-    if membership.empty:
-        return frames[["loop", "frame", "seq_s"]].copy()
-    per_workload = passes.merge(membership, on="pass").pivot_table(
-        index=["loop", "frame"], columns="workload", values="ms", aggfunc="sum"
-    )
-    table = frames[["loop", "frame", "seq_s"]].join(per_workload, on=["loop", "frame"])
-    present = [name for name in WORKLOAD_ORDER if name in table]
-    return table[["loop", "frame", "seq_s", *present]].fillna({name: 0.0 for name in present})
+    scopes["end"] = scopes["start"] + scopes["len"]
+    categorized = {name: bool(workloads(name)) for name in scopes["pass"].unique()}
+    scopes["categorized"] = scopes["pass"].map(categorized).astype(bool)
 
+    totals = scopes.groupby("frame").agg(first_start=("start", "min"), last_end=("end", "max"))
+    totals["gpu_span_ms"] = (totals["last_end"] - totals["first_start"]) / 1e6
+    totals = totals[["gpu_span_ms"]]
 
-def _metrics(metrics: dict | None) -> dict[str, float]:
-    if not metrics:
-        return {}
-    values = {}
-    for key, column in METRIC_FIELDS.items():
-        value = metrics.get(key)
-        if isinstance(value, (int, float)):
-            values[column] = float(value)
-    fan = metrics.get("fan_speed")
-    if isinstance(fan, dict):
-        for unit, value in fan.items():
-            if unit in FAN_FIELDS and isinstance(value, (int, float)):
-                values[FAN_FIELDS[unit]] = float(value)
-    return values
+    left = scopes[~scopes["categorized"]]
+    totals["left_out_ms"] = left.groupby("frame")["len"].sum() / 1e6
+    left_out = (left.groupby("pass")["len"].sum() / 1e6).to_dict()
+
+    # Sorted by start, longest first: a scope ending no later than every earlier one in its command buffer is
+    # nested inside one of them.
+    kept = scopes[scopes["categorized"]]
+    kept = kept.iloc[np.lexsort((-kept["end"], kept["start"], kept["command_buffer"], kept["frame"]))]
+    earlier_end = kept.groupby(["frame", "command_buffer"])["end"].cummax()
+    earlier_end = earlier_end.groupby([kept["frame"], kept["command_buffer"]]).shift(1)
+    kept = kept.assign(ms=kept["len"] / 1e6, top_ms=np.where(earlier_end.isna() | (kept["end"] > earlier_end), 1, 0))
+    kept["top_ms"] *= kept["ms"]
+
+    passes = kept.groupby(["frame", "pass"], as_index=False, sort=True)[["ms", "top_ms"]].sum()
+    totals["gpu_sum_ms"] = passes.groupby("frame")["top_ms"].sum()
+    seq_s = frames.set_index("frame")["simulation_time_ns"] / 1e9
+    passes.insert(0, "loop", 1)
+    passes.insert(2, "seq_s", passes["frame"].map(seq_s))
+    return passes[["loop", "frame", "seq_s", "pass", "ms", "top_ms"]], totals, left_out

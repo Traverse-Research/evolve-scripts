@@ -24,7 +24,7 @@ FILES = [
     "evolve-charts.py",
     "evolve-charts.py.lock",
     ".streamlit/config.toml",
-    "exports/README.txt",
+    "results/README.txt",
 ]
 FOLDERS = ["evolve_charts", "static"]
 EXECUTABLE = {"Start Evolve Charts.command", "start-evolve-charts.sh"}
@@ -42,7 +42,7 @@ Linux:   run ./start-evolve-charts.sh in a terminal.
 The first start downloads Python and the libraries the tool uses (about 150 MB) and needs an
 internet connection. Keep the window that opens running while you use the tool.
 
-To load results automatically, put Evolve export files in the "exports" folder.
+To load results automatically, put .evolve files in the "results" folder.
 """
 
 

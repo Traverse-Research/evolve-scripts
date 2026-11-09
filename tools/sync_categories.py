@@ -18,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SOURCE = REPO_ROOT.parent / "evolve/crates/evolve-frame-bucketing/src/lib.rs"
 OUTPUT = REPO_ROOT / "evolve_charts/scope_catalog.py"
 
-ARM = re.compile(r"Self::(\w+) => vec!\[(.*?)\n\s*\],", re.DOTALL)
+ARM = re.compile(r"Self::(\w+) => vec!\[(.*?)\],", re.DOTALL)
 NAME = re.compile(r'Self::(\w+) => "([^"]*)",')
 TOKEN = re.compile(r'^\s*//.*$|get_or_intern_static\(\s*"(?P<name>[^"]+)"\s*\)', re.MULTILINE)
 
@@ -28,8 +28,14 @@ def _impl(source: str, category: str) -> str:
     return source[start : source.index("fn translated(self)", start)]
 
 
+def _deprecated(source: str) -> str:
+    """Pass names Evolve renamed or removed. Evolve still counts them, so older exports stay comparable."""
+    start = source.index("fn pipelines_list_deprecated")
+    return source[start : source.index("impl Category for WorkloadCategory", start)]
+
+
 def _lists(body: str) -> dict[str, list[str]]:
-    lists = body[: body.index("fn name(self)")]
+    lists = body[: body.index("fn name(self)")] if "fn name(self)" in body else body
     return {
         arm.group(1): [token.group("name") for token in TOKEN.finditer(arm.group(2)) if token.group("name")]
         for arm in ARM.finditer(lists)
@@ -44,10 +50,11 @@ def _names(body: str) -> dict[str, str]:
 def parse(source: str) -> tuple[dict, dict, list[str]]:
     workloads_body = _impl(source, "WorkloadCategory")
     workloads: dict[str, list[str]] = {}
-    for workload, scopes in _lists(workloads_body).items():
-        for scope in scopes:
-            if workload not in workloads.setdefault(scope, []):
-                workloads[scope].append(workload)
+    for lists in [_lists(workloads_body), _lists(_deprecated(source))]:
+        for workload, scopes in lists.items():
+            for scope in scopes:
+                if workload not in workloads.setdefault(scope, []):
+                    workloads[scope].append(workload)
 
     uncategorized = _lists(_impl(source, "BucketPassCategory")).get("Uncategorized", [])
     return workloads, _names(workloads_body), uncategorized
@@ -77,7 +84,7 @@ def main() -> None:
         "}",
         "",
     ]
-    OUTPUT.write_text("\n".join(lines), encoding="utf-8")
+    OUTPUT.write_text("\n".join(lines), encoding="utf-8", newline="\n")
     print(f"Wrote {len(workloads)} scope names to {OUTPUT.relative_to(REPO_ROOT)}")
 
 

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from conftest import make_export
+from conftest import make_recording, simple_frames
 from streamlit.testing.v1 import AppTest
 
 ENTRY = str(Path(__file__).resolve().parent.parent / "evolve-charts.py")
@@ -20,12 +20,12 @@ getattr(ui, "{page}")()
 
 
 def run(monkeypatch, folder) -> AppTest:
-    monkeypatch.setenv("EVOLVE_CHARTS_EXPORTS", str(folder))
+    monkeypatch.setenv("EVOLVE_CHARTS_RESULTS", str(folder))
     return AppTest.from_file(ENTRY, default_timeout=60).run()
 
 
 def page(monkeypatch, folder, name: str) -> AppTest:
-    monkeypatch.setenv("EVOLVE_CHARTS_EXPORTS", str(folder))
+    monkeypatch.setenv("EVOLVE_CHARTS_RESULTS", str(folder))
     app = AppTest.from_string(PAGE_SCRIPT.format(page=name), default_timeout=60).run()
     assert not app.exception, name
     return app
@@ -55,16 +55,15 @@ def test_every_page_renders_with_two_results(two_gpus, monkeypatch):
     assert any("Compute: 0.50 ms per frame on Gen 1 GPU" in markdown.value for markdown in app.markdown)
 
 
-def test_results_without_deep_analysis(tmp_path, monkeypatch):
-    (tmp_path / "scores_only.zip").write_bytes(make_export(None, gpu="Gen 1 GPU"))
-    (tmp_path / "scores.csv").write_text("Loop,Ray Tracing,Compute\n1,4000,6000\n")
+def test_results_without_pass_timings(tmp_path, monkeypatch):
+    (tmp_path / "no_passes.evolve").write_bytes(make_recording(simple_frames(2.0), with_scopes=False))
     app = run(monkeypatch, tmp_path)
     assert not app.exception
     visit_every_page(monkeypatch, tmp_path)
 
 
 def test_bad_file_shows_error(tmp_path, monkeypatch):
-    (tmp_path / "broken.zip").write_bytes(b"not a zip")
+    (tmp_path / "broken.evolve").write_bytes(b"not a zip")
     app = run(monkeypatch, tmp_path)
     assert not app.exception
-    assert "not a zip" in app.error[0].value
+    assert "isn't an Evolve run file" in app.error[0].value

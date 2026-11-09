@@ -4,9 +4,10 @@
 #     "streamlit>=1.65",
 #     "plotly>=6",
 #     "pandas>=2.2",
+#     "pyarrow>=18",
 # ]
 # ///
-"""Evolve Charts: turn Evolve deep analysis exports into charts.
+"""Evolve Charts: turn Evolve benchmark runs (.evolve files) into charts.
 
 Start it by double-clicking `Start Evolve Charts.bat` (Windows) or `start-evolve-charts.sh`
 (macOS/Linux), or run `uv run evolve-charts.py`. A page opens in your browser; nothing leaves

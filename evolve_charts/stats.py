@@ -61,7 +61,7 @@ def per_frame(result: Result, skip_s: float, level: Level, within: Within = None
 def summary(results: dict[str, Result], skip_s: float, level: Level, within: Within = None) -> pd.DataFrame:
     """One row per (result, item) with mean/median/p5/p95 milliseconds per frame.
 
-    Results without data for the level (e.g. no deep analysis) are left out.
+    Results without data for the level (e.g. no pass timings) are left out.
     """
     rows = []
     for label, result in results.items():
@@ -106,7 +106,7 @@ def ordered(items, level: Level) -> list[str]:
 
 
 def frame_totals(results: dict[str, Result], skip_s: float) -> pd.DataFrame:
-    """Deep analysis only: GPU time per frame of all categorized passes, what was left out, and the span."""
+    """Pass timings only: GPU time per frame of all categorized passes, what was left out, and the span."""
     rows = []
     for label, result in results.items():
         if result.passes is None:
@@ -155,7 +155,7 @@ def telemetry_summary(results: dict[str, Result], skip_s: float) -> pd.DataFrame
 
 
 def scores_table(results: dict[str, Result]) -> pd.DataFrame:
-    """Scores as rows (in the order Evolve exports them), results as columns."""
+    """Scores as rows (in Evolve's order), results as columns."""
     names = list(dict.fromkeys(name for result in results.values() for name in result.scores))
     return pd.DataFrame(
         {label: [result.scores.get(name) for name in names] for label, result in results.items() if result.scores},
@@ -201,7 +201,7 @@ def wide_for_spreadsheets(item_summary: pd.DataFrame, value: str = "mean_ms") ->
 
 
 def _smooth(by_time: pd.DataFrame, smooth_s: float) -> pd.DataFrame:
-    """Centred rolling mean over `smooth_s` seconds of benchmark time; exports differ a lot in frames per second."""
+    """Centred rolling mean over `smooth_s` seconds of benchmark time; runs differ a lot in frames per second."""
     if smooth_s <= 0 or len(by_time) < 2:
         return by_time
     step = pd.Series(by_time.index).diff().median()

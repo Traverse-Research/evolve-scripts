@@ -1,15 +1,15 @@
 import pytest
-from conftest import make_export, simple_frames
+from conftest import make_recording, simple_frames
 
 from evolve_charts import stats
-from evolve_charts.loader import load_export
+from evolve_charts.loader import load_recording
 
 
 @pytest.fixture
 def results():
     return {
-        "Gen 1": load_export(make_export([simple_frames(2.0)], gpu="Gen 1 GPU"), "gen1.zip"),
-        "Gen 2": load_export(make_export([simple_frames(1.0)], gpu="Gen 2 GPU"), "gen2.zip"),
+        "Gen 1": load_recording(make_recording(simple_frames(2.0), gpu="Gen 1 GPU"), "gen1.evolve"),
+        "Gen 2": load_recording(make_recording(simple_frames(1.0), gpu="Gen 2 GPU"), "gen2.evolve"),
     }
 
 
@@ -42,13 +42,13 @@ def test_passes_of_a_workload_category(results):
     assert passes.at[("Gen 1", "shadow_filter_pass_0"), "workload"] == "Compute"
 
 
-def test_results_without_deep_analysis_are_left_out_of_pass_views():
+def test_results_without_pass_timings_are_left_out_of_pass_views():
     results = {
-        "Full": load_export(make_export([simple_frames(2.0)], gpu="Gen 1 GPU"), "a.zip"),
-        "Scores only": load_export(make_export(None, gpu="Gen 2 GPU"), "b.zip"),
+        "Full": load_recording(make_recording(simple_frames(2.0), gpu="Gen 1 GPU"), "a.evolve"),
+        "No passes": load_recording(make_recording(simple_frames(1.0), gpu="Gen 2 GPU", with_scopes=False), "b.evolve"),
     }
     assert set(stats.summary(results, 1.0, "pass")["result"]) == {"Full"}
-    assert set(stats.summary(results, 1.0, "workload")["result"]) == {"Full", "Scores only"}
+    assert set(stats.summary(results, 1.0, "workload")["result"]) == {"Full", "No passes"}
 
 
 def test_passes_missing_in_some_frames_count_as_zero(results):
@@ -62,8 +62,9 @@ def test_passes_missing_in_some_frames_count_as_zero(results):
 
 def test_scores_table(results):
     table = stats.scores_table(results)
-    assert table.index.tolist() == ["Ray Tracing", "Rasterization", "Compute"]
-    assert table.at["Compute", "Gen 2"] == 6000
+    assert table.index.tolist() == ["Ray Tracing", "Compute", "Driver", "Energy Consumption"]
+    assert table.at["Compute", "Gen 2"] == table.at["Compute", "Gen 1"]
+    assert table.at["Ray Tracing", "Gen 2"] > table.at["Ray Tracing", "Gen 1"]
 
 
 def test_comparison_table_and_key_numbers(results):
@@ -77,10 +78,10 @@ def test_comparison_table_and_key_numbers(results):
     )
 
 
-def test_timeline_averages_loops_and_smooths():
-    result = load_export(make_export([simple_frames(2.0), simple_frames(4.0)]), "x.zip")
+def test_timeline_smooths():
+    result = load_recording(make_recording(simple_frames(2.0)), "x.evolve")
     raw = stats.timeline(result, 1.0, "pass", ["shadow-raytrace-inline"], 0.0)
-    assert raw["shadow-raytrace-inline"].tolist() == pytest.approx([3.0] * len(raw))
+    assert raw["shadow-raytrace-inline"].tolist() == pytest.approx([2.0] * len(raw))
     smooth = stats.timeline(result, 1.0, "pass", ["shadow-raytrace-inline"], 2.0)
     assert len(smooth) == len(raw)
     assert len(stats.timeline(result, 1.0, "workload", ["Raytracing"], 0.0)) > 0
