@@ -29,7 +29,7 @@ def _impl(source: str, category: str) -> str:
 
 
 def _deprecated(source: str) -> str:
-    """Pass names Evolve renamed or removed. Evolve still counts them, so older exports stay comparable."""
+    """Pass names Evolve renamed or removed. Evolve still counts them, so older runs stay comparable."""
     start = source.index("fn pipelines_list_deprecated")
     return source[start : source.index("impl Category for WorkloadCategory", start)]
 

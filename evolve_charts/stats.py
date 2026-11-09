@@ -32,7 +32,7 @@ TELEMETRY = {
 
 def has_level(result: Result, level: Level) -> bool:
     if level == "workload":
-        return result.workloads is not None and len(result.workloads.columns) > 3
+        return any(name in result.workloads for name in WORKLOAD_ORDER)
     return result.passes is not None
 
 
@@ -47,14 +47,14 @@ def per_frame(result: Result, skip_s: float, level: Level, within: Within = None
     """GPU milliseconds per frame, one column per item; frames where an item didn't run count as 0."""
     if level == "workload":
         table = result.workloads[result.workloads["seq_s"] >= skip_s]
-        return table.set_index(["loop", "frame"]).drop(columns="seq_s")
+        return table.set_index("frame").drop(columns="seq_s")
 
     passes = result.passes[result.passes["seq_s"] >= skip_s]
     if within is not None:
         _, name = within
         passes = passes[passes["pass"].map(lambda scope: name in workloads(scope))]
-    wide = passes.pivot_table(index=["loop", "frame"], columns="pass", values="ms", aggfunc="sum")
-    frame_index = trimmed_frames(result, skip_s).set_index(["loop", "frame"]).index
+    wide = passes.pivot_table(index="frame", columns="pass", values="ms", aggfunc="sum")
+    frame_index = trimmed_frames(result, skip_s).set_index("frame").index
     return wide.reindex(frame_index).fillna(0.0)
 
 
@@ -126,24 +126,21 @@ def frame_totals(results: dict[str, Result], skip_s: float) -> pd.DataFrame:
 def timeline(
     result: Result, skip_s: float, level: Level, items: list[str], smooth_s: float, within: Within = None
 ) -> pd.DataFrame:
-    """Per-frame milliseconds over benchmark time, averaged over loops by frame index."""
+    """Per-frame milliseconds over benchmark time."""
     wide = per_frame(result, skip_s, level, within).reindex(columns=items, fill_value=0.0)
-    source = result.workloads if level == "workload" else trimmed_frames(result, skip_s)
-    wide["seq_s"] = source.set_index(["loop", "frame"])["seq_s"]
-    return _smooth(wide.groupby(level="frame").mean().set_index("seq_s"), smooth_s)
+    wide["seq_s"] = result.workloads.set_index("frame")["seq_s"]
+    return _smooth(wide.set_index("seq_s"), smooth_s)
 
 
 def telemetry_timeline(result: Result, skip_s: float, smooth_s: float) -> pd.DataFrame:
     frames = trimmed_frames(result, skip_s)
     columns = [column for column in TELEMETRY if frames[column].notna().any()]
-    return _smooth(frames.groupby("frame")[["seq_s", *columns]].mean().set_index("seq_s"), smooth_s)
+    return _smooth(frames.set_index("seq_s")[columns], smooth_s)
 
 
 def telemetry_summary(results: dict[str, Result], skip_s: float) -> pd.DataFrame:
     rows = []
     for label, result in results.items():
-        if result.frames is None:
-            continue
         frames = trimmed_frames(result, skip_s)
         row = {"result": label}
         for column, (name, unit) in TELEMETRY.items():

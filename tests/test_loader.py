@@ -23,7 +23,7 @@ def test_full_recording():
         "GPU Driver Version": "1.2.3",
         "Rendering Backend": "Dx12",
     }
-    assert result.contents == ["Scores", "Per frame", "Passes"]
+    assert result.contents == ["Scores", "Passes"]
     assert set(result.passes["pass"]) == {"shadow-raytrace-inline", "shadow_filter_pass_0"}
     assert result.warnings == []
 
@@ -39,7 +39,7 @@ def test_per_frame_workloads_come_from_the_frames_table():
 
 def test_recording_without_pass_timings():
     result = load_recording(make_recording(simple_frames(2.0), with_scopes=False), "x.evolve")
-    assert result.contents == ["Scores", "Per frame"]
+    assert result.contents == ["Scores"]
     assert result.passes is None
     assert result.frames["gpu_clock_mhz"].iloc[2] == 2502
     assert result.frames["board_power_w"].iloc[2] == 200.0

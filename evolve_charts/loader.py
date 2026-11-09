@@ -71,12 +71,12 @@ class Result:
     metadata: dict[str, str] = field(default_factory=dict)
     # Score name -> score. Scores the benchmark doesn't have are absent.
     scores: dict[str, float] = field(default_factory=dict)
-    # One row per (loop, frame): GPU milliseconds per workload category, one column each.
-    workloads: pd.DataFrame | None = None
-    # One row per (loop, frame): sensor readings, and the GPU time sum and span of the passes.
-    frames: pd.DataFrame | None = None
-    # One row per (loop, frame, pass): ms is the pass' own GPU time in that frame; top_ms only counts
-    # instances not nested inside another scope, so summing it never double-counts.
+    # One row per frame: GPU milliseconds per workload category, one column each.
+    workloads: pd.DataFrame = field(default_factory=pd.DataFrame)
+    # One row per frame: sensor readings, and the GPU time sum and span of the passes.
+    frames: pd.DataFrame = field(default_factory=pd.DataFrame)
+    # One row per (frame, pass): ms is the pass' own GPU time in that frame; top_ms only counts instances not
+    # nested inside another scope, so summing it never double-counts. None when the run has no pass timings.
     passes: pd.DataFrame | None = None
     # Total GPU milliseconds per pass that Evolve doesn't assign to a workload category.
     left_out: dict[str, float] = field(default_factory=dict)
@@ -90,13 +90,7 @@ class Result:
     def contents(self) -> list[str]:
         """What this result contains, in the words the tool uses."""
         return [
-            name
-            for name, present in [
-                ("Scores", bool(self.scores)),
-                ("Per frame", self.workloads is not None),
-                ("Passes", self.passes is not None),
-            ]
-            if present
+            name for name, present in [("Scores", bool(self.scores)), ("Passes", self.passes is not None)] if present
         ]
 
 
@@ -209,7 +203,7 @@ def _os_version(version: dict | str | None) -> str:
 
 
 def _base(frames: pd.DataFrame) -> pd.DataFrame:
-    return pd.DataFrame({"loop": 1, "frame": frames["frame"].astype(int), "seq_s": frames["simulation_time_ns"] / 1e9})
+    return pd.DataFrame({"frame": frames["frame"].astype(int), "seq_s": frames["simulation_time_ns"] / 1e9})
 
 
 def _workloads(frames: pd.DataFrame) -> pd.DataFrame:
@@ -273,6 +267,5 @@ def _passes(gpu_scopes: pd.DataFrame, frames: pd.DataFrame) -> tuple[pd.DataFram
     passes = kept.groupby(["frame", "pass"], as_index=False, sort=True)[["ms", "top_ms"]].sum()
     totals["gpu_sum_ms"] = passes.groupby("frame")["top_ms"].sum()
     seq_s = frames.set_index("frame")["simulation_time_ns"] / 1e9
-    passes.insert(0, "loop", 1)
-    passes.insert(2, "seq_s", passes["frame"].map(seq_s))
-    return passes[["loop", "frame", "seq_s", "pass", "ms", "top_ms"]], totals, left_out
+    passes.insert(1, "seq_s", passes["frame"].map(seq_s))
+    return passes[["frame", "seq_s", "pass", "ms", "top_ms"]], totals, left_out

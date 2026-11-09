@@ -98,7 +98,7 @@ CONCEPTS = """
 
 HOW_IT_WORKS = f"""
 **Per frame.** A pass' time is the sum of all its executions in a frame; frames where it didn't run count as
-0. Averages cover every frame of every loop; the first {WARM_UP_S:g} s are skipped because they contain
+0. Averages cover every frame of the run; the first {WARM_UP_S:g} s are skipped because they contain
 one-off setup work. Lines over time are smoothed over {SMOOTHING_S:g} s.
 
 **Left out.** Passes Evolve doesn't assign to a workload category (copies, clears, the user interface, …)
@@ -409,14 +409,10 @@ def _result_card(result: Result, label: str, color: str) -> None:
         " · ".join(filter(None, [meta.get("Rendering Backend"), version])),
         " · ".join(filter(None, [driver, os_name])),
     ]
-    per_frame = result.frames if result.frames is not None else result.workloads
-    if per_frame is not None:
-        frames = per_frame[per_frame["seq_s"] >= WARM_UP_S]
-        duration = frames["seq_s"].max() - frames["seq_s"].min() if len(frames) else 0
-        lines.append(f"{len(frames):,} frames · {duration // 60:.0f}:{duration % 60:02.0f} min")
-    contents = "<br>".join(
-        f"{'✓' if name in result.contents else '✗'} {name}" for name in ["Scores", "Per frame", "Passes"]
-    )
+    frames = result.frames[result.frames["seq_s"] >= WARM_UP_S]
+    duration = frames["seq_s"].max() - frames["seq_s"].min() if len(frames) else 0
+    lines.append(f"{len(frames):,} frames · {duration // 60:.0f}:{duration % 60:02.0f} min")
+    contents = "<br>".join(f"{'✓' if name in result.contents else '✗'} {name}" for name in ["Scores", "Passes"])
     body = "<br>".join(line for line in lines if line)
     st.markdown(f'<div class="result-meta">{body}<div class="contents">{contents}</div></div>', unsafe_allow_html=True)
     st.caption(result.filename)
@@ -649,9 +645,7 @@ def _sensors_page() -> None:
     context = _context()
     _title("GPU sensors", "Clocks, power and temperature during the run. Falling clocks can mean throttling.")
     timelines = {
-        label: stats.telemetry_timeline(result, WARM_UP_S, SMOOTHING_S)
-        for label, result in context.results.items()
-        if result.frames is not None
+        label: stats.telemetry_timeline(result, WARM_UP_S, SMOOTHING_S) for label, result in context.results.items()
     }
     if _missing({label for label, timeline in timelines.items() if len(timeline.columns)}, "GPU sensor data"):
         return
@@ -758,9 +752,9 @@ def _per_frame_long(results: dict[str, Result], skip_s: float) -> pd.DataFrame:
         passes = result.passes[result.passes["seq_s"] >= skip_s]
         frames.append(
             passes.assign(result=label, workload=passes["pass"].map(lambda scope: ", ".join(workloads(scope))))[
-                ["result", "loop", "frame", "seq_s", "workload", "pass", "ms"]
+                ["result", "frame", "seq_s", "workload", "pass", "ms"]
             ]
         )
     if not frames:
-        return pd.DataFrame(columns=["result", "loop", "frame", "benchmark_time_s", "workload", "pass", "ms"])
+        return pd.DataFrame(columns=["result", "frame", "benchmark_time_s", "workload", "pass", "ms"])
     return pd.concat(frames).rename(columns={"seq_s": "benchmark_time_s"})
