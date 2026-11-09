@@ -10,7 +10,7 @@ def run_command(command):
 
 def main():
     id = "nl.traverse_research.evolve"
-    path = "/sdcard/Android/data/nl.traverse_research.evolve/files"
+    results = "/sdcard/Android/data/nl.traverse_research.evolve/files/Documents/results"
 
     # Get Evolve UID
     packages = run_command(["adb", "shell", "pm", "list", "packages", "-U", id])
@@ -38,9 +38,8 @@ def main():
         sys.exit(1)
 
     moment = datetime.now().strftime("%Y%m%d_%H%M%S")
-    pull_suggestion = f"evolve-results-{moment}"
-    
-    print(f"Started Evolve on Android. When the benchmark finishes, manually pull the specified files from {path} using adb pull or MTP.")
+    print("Started Evolve on Android. When the benchmark finishes, pull its .evolve files with:")
+    print(f"  adb pull {results} evolve-results-{moment}")
     print("\nStarting logcat in 4 seconds")
 
     time.sleep(4)

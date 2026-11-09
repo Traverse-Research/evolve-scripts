@@ -23,6 +23,11 @@ WORKLOAD_DESCRIPTIONS = {
 WORKLOAD_ORDER = list(WORKLOAD_DESCRIPTIONS)
 
 
+def workload_variants(scope: str) -> list[str]:
+    """The `WorkloadCategory` variants the pass counts towards, as named in Evolve's source."""
+    return WORKLOADS.get(scope, [])
+
+
 def workloads(scope: str) -> list[str]:
     """The workload categories the pass is part of, in Evolve's order; empty if Evolve leaves it uncategorized.
 
